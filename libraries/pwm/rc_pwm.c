@@ -52,6 +52,7 @@ int rc_pwm_init(int ss, int frequency){
 	// check driver is loaded
 	if(access(pwm_export_path[0][ss], F_OK ) == 0) ver=0;
 	else if(access(pwm_export_path[1][ss], F_OK ) == 0) ver=1;
+	else if(access(pwm_export_path[2][ss], F_OK ) == 0) ver=2;
 	else{
 		fprintf(stderr,"ERROR: ti-pwm driver not loaded for pwm subsystem %d\n", ss);
 		return -1;
@@ -151,6 +152,7 @@ int rc_pwm_close(int ss){
 	// attempt both driver versions
 	if(access(pwm_unexport_path[0][ss], F_OK ) == 0) ver=0;
 	else if(access(pwm_unexport_path[1][ss], F_OK ) == 0) ver=1;
+	else if(access(pwm_unexport_path[2][ss], F_OK ) == 0) ver=2;
 	else{
 		fprintf(stderr,"ERROR in rc_pwm_close: ti-pwm driver not loaded for pwm subsystem %d\n", ss);
 		return -1;

@@ -13,6 +13,20 @@
 #include <sys/mman.h>	// mmap
 #include <string.h>
 
+/* Defines for kernel > 4.9 PRU remoteproc driver */
+#define PRU0_STATE_PATH "/sys/class/remoteproc/remoteproc1/state"
+#define PRU1_STATE_PATH "/sys/class/remoteproc/remoteproc2/state"
+#define PRU0_FW_PATH "/sys/class/remoteproc/remoteproc1/firmware"
+#define PRU1_FW_PATH "/sys/class/remoteproc/remoteproc2/firmware"
+#define PRU_START "start"
+#define PRU_STOP "stop"
+#define PRU_START_LEN 5
+#define PRU_STOP_LEN 4
+#define PRU_STATE_RUNNING "running"
+#define PRU_STATE_OFFLINE "offline"
+#define PRU_STATE_LEN 7
+
+/* Defines for kernel < 4.9 PRU remoteproc driver */
 #define PRU_UNBIND_PATH "/sys/bus/platform/drivers/pru-rproc/unbind"
 #define PRU_BIND_PATH "/sys/bus/platform/drivers/pru-rproc/bind"
 #define PRU0_NAME "4a334000.pru0"
@@ -36,36 +50,92 @@ static unsigned int *prusharedMem_32int_ptr;
 * the servo and encoder functions in this C file.
 *******************************************************************************/
 int initialize_pru(){
-	int  bind_fd;
+	int bind_fd, state_fd0, state_fd1;
 	unsigned int	*pru;		// Points to start of PRU memory.
-	int	fd;
+	int	fd, ver = -1;
+	char pru_state[PRU_STATE_LEN];
 	
 	// reset memory pointer to NULL so if init fails it doesn't point somewhere bad
 	prusharedMem_32int_ptr = NULL;
 
-	// open file descriptors for pru rproc driver
-	bind_fd = open(PRU_BIND_PATH, O_WRONLY);
-	if(bind_fd == -1){
-		printf("ERROR: pru-rproc driver missing\n");
+	/* check for PRU remoteproc driver versions */
+	if(access(PRU_BIND_PATH, F_OK ) == 0) ver=0;
+	else if(access(PRU0_STATE_PATH, F_OK ) == 0)
+		 if(access(PRU1_STATE_PATH, F_OK ) == 0) ver=1;
+		 else{
+		 		fprintf(stderr,"ERROR: pru-rproc driver missing");
+		 		return -1;}
+	else{
+		fprintf(stderr,"ERROR: pru-rproc driver missing");
 		return -1;
 	}
 
-	// if pru0 is not loaded, load it
-	if(access(PRU0_UEVENT, F_OK)!=0){
-		if(write(bind_fd, PRU0_NAME, PRU_NAME_LEN)<0){
-			printf("ERROR: pru0 bind failed\n");
+	switch(ver){
+	case 0:
+			// if pru0 is not loaded, load it
+			if(access(PRU0_UEVENT, F_OK)!=0){
+				if(write(bind_fd, PRU0_NAME, PRU_NAME_LEN)<0){
+					printf("ERROR: pru0 bind failed\n");
+					return -1;
+				}
+			}
+			// if pru1 is not loaded, load it
+			if(access(PRU1_UEVENT, F_OK)!=0){
+				if(write(bind_fd, PRU1_NAME, PRU_NAME_LEN)<0){
+					printf("ERROR: pru1 bind failed\n");
+					return -1;
+				}
+			}
+
+			close(bind_fd);
+			break;
+
+	case 1:
+			// open file descriptors for pru rproc driver
+			state_fd0 = open(PRU0_STATE_PATH, O_RDWR);
+			if(state_fd0 == -1){
+				printf("ERROR: pru-rproc driver missing\n");
+				return -1;
+			}
+			state_fd1 = open(PRU1_STATE_PATH, O_RDWR);
+			if(state_fd1 == -1){
+				printf("ERROR: pru-rproc driver missing\n");
+				return -1;
+			}
+
+			/* if pru0 is not loaded, load it */
+			if(read(state_fd0, &pru_state, PRU_STATE_LEN) < 0){
+				printf("ERROR: pru0 state check failed\n");
+				return -1;
+			}
+			if(!memcmp(pru_state, PRU_STATE_OFFLINE, PRU_STATE_LEN)){
+				if(write(state_fd0, PRU_START, PRU_START_LEN)<0){
+					printf("ERROR: pru0 start failed\n");
+					return -1;
+				}
+			}
+
+			/* if pru1 is not loaded, load it */
+			if(read(state_fd1, &pru_state, PRU_STATE_LEN) < 0){
+				printf("ERROR: pru1 state check failed\n");
+				return -1;
+			}
+			if(!memcmp(pru_state, PRU_STATE_OFFLINE, PRU_STATE_LEN)){
+				if(write(state_fd1, PRU_START, PRU_START_LEN)<0){
+					printf("ERROR: pru0 start failed\n");
+					return -1;
+				}
+			}
+
+			close(state_fd0);
+			close(state_fd1);
+			break;
+
+	default:
+			printf("ERROR: pru-rproc driver missing\n");
 			return -1;
-		}
-	}
-	// if pru1 is not loaded, load it
-	if(access(PRU1_UEVENT, F_OK)!=0){
-		if(write(bind_fd, PRU1_NAME, PRU_NAME_LEN)<0){
-			printf("ERROR: pru1 bind failed\n");
-			return -1;
-		}
 	}
 
-	close(bind_fd);
 
 	// start mmaping shared memory
 	fd = open("/dev/mem", O_RDWR | O_SYNC);
@@ -104,50 +174,127 @@ int initialize_pru(){
 * the servo and encoder functions in this C file.
 *******************************************************************************/
 int restart_pru(){
-	int unbind_fd, bind_fd;
+	int state_fd0, state_fd1, unbind_fd, bind_fd;
+	char pru_state[PRU_STATE_LEN];
+	int ver = -1;
 
-	// open file descriptors for pru rproc driver
-	unbind_fd = open(PRU_UNBIND_PATH, O_WRONLY);
-	if(unbind_fd == -1){
-		printf("open unbind fail\n");
+	/* check for PRU remoteproc driver versions */
+	if(access(PRU_BIND_PATH, F_OK ) == 0) ver=0;
+	else if(access(PRU0_STATE_PATH, F_OK ) == 0)
+		 if(access(PRU1_STATE_PATH, F_OK ) == 0) ver=1;
+		 else{
+		 		fprintf(stderr,"ERROR: pru-rproc driver missing");
+		 		return -1;}
+	else{
+		fprintf(stderr,"ERROR: pru-rproc driver missing");
 		return -1;
 	}
-	bind_fd = open(PRU_BIND_PATH, O_WRONLY);
-	if(bind_fd == -1){
-		printf("open bind fail\n");
-		return -1;
-	}
 
 
-	// if pru0 is loaded, unload it
-	if(access(PRU0_UEVENT, F_OK)==0){
-		//printf("unbinding pru0\n");
-		if(write(unbind_fd, PRU0_NAME, PRU_NAME_LEN)<0){
-			printf("ERROR: pru0 unbind failed\n");
+	switch(ver){
+	case 0:
+			// open file descriptors for pru rproc driver
+			unbind_fd = open(PRU_UNBIND_PATH, O_WRONLY);
+			if(unbind_fd == -1){
+				printf("open unbind fail\n");
+				return -1;
+			}
+			bind_fd = open(PRU_BIND_PATH, O_WRONLY);
+			if(bind_fd == -1){
+				printf("open bind fail\n");
+				return -1;
+			}
+
+
+			// if pru0 is loaded, unload it
+			if(access(PRU0_UEVENT, F_OK)==0){
+				//printf("unbinding pru0\n");
+				if(write(unbind_fd, PRU0_NAME, PRU_NAME_LEN)<0){
+					printf("ERROR: pru0 unbind failed\n");
+					return -1;
+				}
+			}
+			// if pru1 is loaded, unload it
+			if(access(PRU1_UEVENT, F_OK)==0){
+				//printf("unbinding pru1\n");
+				if(write(unbind_fd, PRU1_NAME, PRU_NAME_LEN)<0){
+					printf("ERROR: pru1 unbind failed\n");
+					return -1;
+				}
+			}
+
+			// now bind both
+			if(write(bind_fd, PRU0_NAME, PRU_NAME_LEN)<0){
+				printf("ERROR: pru0 bind failed\n");
+				return -1;
+			}
+			if(write(bind_fd, PRU1_NAME, PRU_NAME_LEN)<0){
+				printf("ERROR: pru1 bind failed\n");
+				return -1;
+			}
+
+			close(unbind_fd);
+			close(bind_fd);
+			break;
+
+	case 1:
+			// open file descriptors for pru rproc driver
+			state_fd0 = open(PRU0_STATE_PATH, O_RDWR);
+			if(state_fd0 == -1){
+				printf("ERROR: pru-rproc driver missing\n");
+				return -1;
+			}
+			state_fd1 = open(PRU1_STATE_PATH, O_RDWR);
+			if(state_fd1 == -1){
+				printf("ERROR: pru-rproc driver missing\n");
+				return -1;
+			}
+
+			// if pru0 is loaded, unload it
+			if(read(state_fd0, &pru_state, PRU_STATE_LEN) < 0){
+				printf("ERROR: pru0 state check failed\n");
+				return -1;
+			}
+			if(memcmp(pru_state, PRU_STATE_RUNNING, PRU_STATE_LEN)){
+				if(write(state_fd0, PRU_STOP, PRU_STOP_LEN)<0){
+					printf("ERROR: pru0 stop failed\n");
+					return -1;
+				}
+			}
+
+
+			// if pru1 is loaded, unload it
+			if(read(state_fd1, &pru_state, PRU_STATE_LEN) < 0){
+				printf("ERROR: pru1 state check failed\n");
+				return -1;
+			}
+			if(memcmp(pru_state, PRU_STATE_RUNNING, PRU_STATE_LEN)){
+				if(write(state_fd1, PRU_STOP, PRU_STOP_LEN)<0){
+					printf("ERROR: pru1 stop failed\n");
+					return -1;
+				}
+			}
+
+			// now start both
+			if(write(state_fd0, PRU_START, PRU_START_LEN)<0){
+				printf("ERROR: pru0 start failed\n");
+				return -1;
+			}
+			if(write(state_fd1, PRU_START, PRU_START_LEN)<0){
+					printf("ERROR: pru1 start failed\n");
+					return -1;
+				}
+
+			close(state_fd0);
+			close(state_fd1);
+			break;
+
+	default:
+			printf("ERROR: pru-rproc driver missing\n");
 			return -1;
-		}
-	}
-	// if pru1 is loaded, unload it
-	if(access(PRU1_UEVENT, F_OK)==0){
-		//printf("unbinding pru1\n");
-		if(write(unbind_fd, PRU1_NAME, PRU_NAME_LEN)<0){
-			printf("ERROR: pru1 unbind failed\n");
-			return -1;
-		}
 	}
 
-	// now bind both
-	if(write(bind_fd, PRU0_NAME, PRU_NAME_LEN)<0){
-		printf("ERROR: pru0 bind failed\n");
-		return -1;
-	}
-	if(write(bind_fd, PRU1_NAME, PRU_NAME_LEN)<0){
-		printf("ERROR: pru1 bind failed\n");
-		return -1;
-	}
 
-	close(unbind_fd);
-	close(bind_fd);
 	return 0;
 }
 
