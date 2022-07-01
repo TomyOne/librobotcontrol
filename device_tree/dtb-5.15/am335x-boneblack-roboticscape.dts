@@ -18,8 +18,8 @@
 /dts-v1/;
 
 #include "am33xx.dtsi"
-#include "am335x-bone-common-no-capemgr.dtsi"
-#include "am335x-bone-common-universal-pins.dtsi"
+#include "am335x-bone-common.dtsi"
+#include "am335x-bone-common-univ.dtsi"
 #include "am335x-roboticscape.dtsi"
 
 / {
